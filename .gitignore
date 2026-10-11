@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+cache/
+settings.json
+*.broken-*
+*.csv
+test-results.txt

@@ -1,0 +1,2 @@
+# Python 3.10+ and Tkinter. Only Python standard-library modules are used.
+# On Linux install your system's python3-tk package for the desktop window.
