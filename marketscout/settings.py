@@ -20,7 +20,7 @@ def default_settings():
                 batch_size=10, scan_limit=600, detail_limit=30, buy_tax=5, sell_tax=5,
                 food=0, medicine=0, repair=0, travel=0, other=0, craft_per=0,
                 min_units_day=1, min_deals_week=3, max_sale_age_hours=72,
-                show_illiquid=False, catalog_search='',
+                show_illiquid=False, catalog_search='', analysis_mode='all', analysis_job='all',
                 consumables=[], item_profiles={}, geometry='1320x880',
                 professions={job: dict(enabled=True, level=1, hq=False, books=False,
                                       specialist=False, rate=0, per_unit=0,
@@ -64,6 +64,12 @@ def normalize_settings(raw):
         raise ValueError('Некорректный фильтр спроса')
     result['show_illiquid'] = raw.get('show_illiquid', False)
     result['catalog_search'] = str(raw.get('catalog_search', '')).strip()[:200]
+    for key, allowed in (('analysis_mode', {'all', 'craft', 'gather'}),
+                         ('analysis_job', {'all', *JOBS})):
+        value = raw.get(key, 'all')
+        if value not in allowed:
+            raise ValueError(f'{key}: некорректный отбор')
+        result[key] = value
     profiles = raw.get('professions', {})
     if not isinstance(profiles, dict):
         raise ValueError('Некорректные настройки профессий')

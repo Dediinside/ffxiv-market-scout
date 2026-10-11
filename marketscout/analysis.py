@@ -303,6 +303,32 @@ def select_items(candidates, limit, search=''):
     return selected
 
 
+def select_finalists(candidates, items, velocities, limit):
+    """Reserve demand-ranked turns for each job/source, avoiding gatherer starvation."""
+    available = set(items)
+    buckets = defaultdict(set)
+    for candidate in candidates:
+        if candidate['item'] in available:
+            buckets[(candidate['job'], candidate['mode'])].add(candidate['item'])
+    rank = lambda item: (-velocities.get(item, -1), item)
+    groups = [(key, deque(sorted(values, key=rank))) for key, values in buckets.items()]
+    groups.sort(key=lambda group: (rank(group[1][0]), group[0]))
+    selected, seen = [], set()
+    while groups and len(selected) < limit:
+        remaining = []
+        for key, queue in groups:
+            while queue and queue[0] in seen:
+                queue.popleft()
+            if queue and len(selected) < limit:
+                item = queue.popleft()
+                selected.append(item)
+                seen.add(item)
+            if queue:
+                remaining.append((key, queue))
+        groups = remaining
+    return selected
+
+
 def analyze(data, settings, market, demo=False, force=False, progress=lambda s: None, cancel=None):
     from .catalog import eligible
     from .settings import normalize_settings
@@ -312,6 +338,10 @@ def analyze(data, settings, market, demo=False, force=False, progress=lambda s: 
             raise InterruptedError('Анализ отменён')
     stopped()
     candidates = eligible(data, settings)
+    if settings['analysis_mode'] != 'all':
+        candidates = [c for c in candidates if c['mode'] == settings['analysis_mode']]
+    if settings['analysis_job'] != 'all':
+        candidates = [c for c in candidates if c['job'] == settings['analysis_job']]
     if settings['catalog_search']:
         candidates = [c for c in candidates if settings['catalog_search'].casefold() in data['items'][c['item']]['name'].casefold()]
     total_items = len({c['item'] for c in candidates})
@@ -326,9 +356,10 @@ def analyze(data, settings, market, demo=False, force=False, progress=lambda s: 
     stopped()
     if not velocities and items:
         warnings.append('Предварительные показатели спроса недоступны; подробный просмотр ограничен исходной выборкой.')
-    finalists = sorted(items, key=lambda i: (-velocities.get(i, -1), i))[:settings['detail_limit']]
+    finalists = select_finalists(candidates, items, velocities, settings['detail_limit'])
+    finalist_set = set(finalists)
     # One cheapest evaluated alternative per source type/job/item/quality, with distinct timed source conditions.
-    candidates = [c for c in candidates if c['item'] in set(finalists)]
+    candidates = [c for c in candidates if c['item'] in finalist_set]
     output = demo_market(finalists) if demo else market.fetch(settings['sale_world'], finalists,
              history=True, force=force, progress=progress, cancel=cancel)
     inputs = set()
@@ -364,4 +395,7 @@ def analyze(data, settings, market, demo=False, force=False, progress=lambda s: 
         for row in rows:
             row['details'] = 'DEMO: все цены и продажи искусственные.\n\n' + row['details']
         warnings.append('DEMO: искусственные цены/история; расписание из настоящего каталога.')
-    return rows, dict(eligible=total_items, screened=len(items), detailed=len(finalists), warnings=warnings)
+    return rows, dict(eligible=total_items, screened=len(items), detailed=len(finalists),
+                     analyzed_jobs=sorted({c['job'] for c in candidates}),
+                     analysis_mode=settings['analysis_mode'], analysis_job=settings['analysis_job'],
+                     warnings=warnings)

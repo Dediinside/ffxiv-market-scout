@@ -30,6 +30,7 @@ class Application:
         self.cancel = threading.Event()
         self.generation, self.closed, self.save_timer = 0, False, None
         self.selected = None
+        self.analyzed_scope = None
         self.sort_column, self.descending = "profit", True
         self.vars, self.profiles = {}, {}
         self.scopes = json.loads((self.base_dir / "data" / "scopes.json").read_text(encoding="utf-8"))
@@ -126,7 +127,12 @@ class Application:
                                    ("job", "Профессия", ["Все"] + list(catalog.JOBS)),
                                    ("quality", "Качество", ["Все", "NQ", "HQ"])):
             ttk.Label(filters, text=title).pack(side="left", padx=(0, 4))
-            var = tk.StringVar(self.root, values[0])
+            initial = values[0]
+            if key == "mode":
+                initial = {"all": "Все", "craft": "Крафт", "gather": "Сбор"}[self.settings['analysis_mode']]
+            elif key == "job":
+                initial = "Все" if self.settings['analysis_job'] == 'all' else self.settings['analysis_job']
+            var = tk.StringVar(self.root, initial)
             self.filters[key] = var
             cb = ttk.Combobox(filters, textvariable=var, values=values, width=21 if key == "priority" else 12, state="readonly")
             cb.pack(side="left", padx=(0, 8))
@@ -145,6 +151,7 @@ class Application:
             entry.bind("<FocusOut>", self.schedule_save)
         self.complete = tk.BooleanVar(self.root, False)
         ttk.Checkbutton(extras, text="Только известная себестоимость", variable=self.complete, command=self.redraw).pack(side="left")
+        ttk.Button(extras, text="Сбросить фильтры", command=self.reset_filters).pack(side="right")
         demand = ttk.Frame(main)
         demand.pack(fill="x", pady=(0, 8))
         for key, title, default in (("min_units_day", "Мин. шт./день", 1),
@@ -159,6 +166,8 @@ class Application:
                         command=self.schedule_save).pack(side="left")
         self.status = tk.StringVar(self.root)
         ttk.Label(main, textvariable=self.status, wraplength=1280, foreground=MUTED).pack(fill="x", pady=(0, 6))
+        self.result_note = tk.StringVar(self.root)
+        ttk.Label(main, textvariable=self.result_note, wraplength=1280, foreground="#f3c66c").pack(fill="x", pady=(0, 6))
         panes = ttk.Panedwindow(main, orient="vertical")
         panes.pack(fill="both", expand=True)
         table_frame, details = ttk.Frame(panes), ttk.Frame(panes)
@@ -307,6 +316,7 @@ class Application:
             else:
                 result[key] = self.numeric(text, key, integer=key in {"batch_size", "scan_limit", "detail_limit", "min_deals_week"}, nullable=key == "budget")
         result["show_illiquid"] = self.show_illiquid.get()
+        result["analysis_mode"], result["analysis_job"] = self.current_scope()
         for key in ("batch_size", "scan_limit", "detail_limit"):
             if result[key] < 1:
                 raise ValueError(f"{key}: значение должно быть больше нуля")
@@ -388,6 +398,7 @@ class Application:
                     if event[0] == "done":
                         self.rows, summary, self.catalog = event[2:]
                         self.summary = summary
+                        self.analyzed_scope = (summary.get('analysis_mode', 'all'), summary.get('analysis_job', 'all'))
                         warnings = summary.get("warnings", [])
                         self.status.set(f"Доступно {summary.get('eligible', '?')} · просмотрено {summary.get('screened', '?')} · подробно {summary.get('detailed', '?')}" +
                                         (" · " + "; ".join(map(str, warnings)) if warnings else ""))
@@ -402,7 +413,20 @@ class Application:
         if event is not None and getattr(event, "widget", None) is not None:
             if event.widget.cget("textvariable") == str(self.filters["priority"]):
                 self.sort_column, self.descending = PRIORITIES[self.filters["priority"].get()]
+        self.schedule_save()
         self.redraw()
+
+    def current_scope(self):
+        return ({"Все": "all", "Крафт": "craft", "Сбор": "gather"}[self.filters['mode'].get()],
+                'all' if self.filters['job'].get() == 'Все' else self.filters['job'].get())
+
+    def reset_filters(self):
+        for key in ('mode', 'job', 'quality'):
+            self.filters[key].set('Все')
+        self.filters['search'].set('')
+        self.filters['min_profit'].set('')
+        self.complete.set(False)
+        self.filter_change()
 
     def sort(self, column):
         self.descending = not self.descending if column == self.sort_column else column not in {"name", "job", "level", "cost", "competing_units"}
@@ -423,6 +447,11 @@ class Application:
         except ValueError:
             return
         self.table.delete(*self.table.get_children())
+        note = f"Показано {len(indices)} из {len(self.rows)} рассчитанных вариантов."
+        outdated = self.analyzed_scope is not None and self.current_scope() != self.analyzed_scope
+        if outdated:
+            note += ' Отбор профессии/источника изменён: нажмите «Анализировать рынок» для нового поиска.'
+        self.result_note.set(note)
         for index in indices:
             row = self.rows[index]
             values = []
@@ -441,7 +470,16 @@ class Application:
             self.table.selection_set(str(self.selected))
         else:
             self.selected = None
-            self.set_detail("Нет строк по выбранным фильтрам." if self.rows else "Запустите анализ. Для сбора прибыль/час появится после личного замера скорости.")
+            if self.rows:
+                text = 'Нет строк по выбранным фильтрам. '
+                text += ('Выберите профессию и источник, затем нажмите «Анализировать рынок»: старый расчёт использовал другой отбор.'
+                         if outdated else 'Очистите минимальную прибыль или нажмите «Сбросить фильтры», чтобы увидеть убытки и неизвестную себестоимость.')
+            elif self.analyzed_scope is not None:
+                text = ('В рассмотренной выборке нет вариантов с подтверждённым спросом. Проверьте уровни и доступ профессий; '
+                        'для разбора включите «Показать малоликвидные для сравнения», очистите минимальную прибыль и повторите анализ.')
+            else:
+                text = 'Запустите анализ. Для сбора прибыль/час появится после личного замера скорости.'
+            self.set_detail(text)
 
     def set_detail(self, text, links=()):
         self.detail.configure(state="normal")
