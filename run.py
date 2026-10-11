@@ -43,7 +43,9 @@ def main():
         import tkinter as tk
         from marketscout.app import Application
         root = tk.Tk()
-        Application(root, demo=args.demo, base_dir=BASE, settings_path=config_path)
+        app = Application(root, demo=args.demo, base_dir=BASE, settings_path=config_path)
+        from update_checker import UpdateBar
+        app.updates = UpdateBar(root, 'Dediinside/ffxiv-market-scout', __version__, demo=args.demo)
         root.mainloop()
         return
     settings, warnings = load_settings(config_path)
