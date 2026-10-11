@@ -7,7 +7,7 @@ from pathlib import Path
 
 from marketscout.settings import default_settings, normalize_settings, load_settings, save_settings
 from marketscout.market import Listing, Sale, Snapshot
-from marketscout.analysis import estimate, demand, select_items, analyze, item_url
+from marketscout.analysis import estimate, demand, select_items, select_finalists, analyze, item_url
 
 NOW = int(time.time())
 
@@ -124,6 +124,44 @@ class AnalysisTests(unittest.TestCase):
         cancel = threading.Event(); cancel.set()
         with self.assertRaises(InterruptedError):
             analyze(data, settings, FakeMarket(), cancel=cancel)
+
+    def test_fast_selling_gatherables_do_not_displace_crafters(self):
+        candidates = [dict(item=i, job='Miner', mode='gather') for i in range(1, 41)]
+        candidates += [dict(item=100, job='Carpenter', mode='craft'),
+                       dict(item=101, job='Carpenter', mode='craft')]
+        velocities = {i: 10000-i for i in range(1, 41)}
+        velocities.update({100: 4, 101: 3})
+        chosen = select_finalists(candidates, list(velocities), velocities, 3)
+        self.assertEqual(chosen, [1, 100, 2])
+        candidates += [dict(item=1, job='Botanist', mode='gather')]
+        chosen = select_finalists(candidates, list(velocities), velocities, 100)
+        self.assertEqual(len(chosen), len(set(velocities)))
+        self.assertEqual(len(chosen), len(set(chosen)))
+
+    def test_profession_and_source_filter_before_any_market_screening(self):
+        data, settings, _, sale, buying = fixture()
+        data['items'][4] = dict(name='Ore', hq=False)
+        data['gathering'] = [dict(id=4, item=4, job='Miner', level=1, book=0,
+                                  kind='always', windows=[], location='Mine', conditions=[])]
+        settings.update(analysis_job='Carpenter', analysis_mode='craft')
+        calls = []
+        class FakeMarket:
+            warnings = []
+            def aggregate(self, scope, ids, **kwargs):
+                calls.append(set(ids))
+                return {1: 1, 4: 100000}
+            def fetch(self, scope, ids, history=False, **kwargs):
+                return {i: (sale if history else buying[i]) for i in ids}
+        rows, summary = analyze(data, settings, FakeMarket())
+        self.assertEqual(calls, [{1}])
+        self.assertEqual(summary['eligible'], 1)
+        self.assertEqual(summary['analyzed_jobs'], ['Carpenter'])
+        self.assertEqual({r['job'] for r in rows}, {'Carpenter'})
+        settings['analysis_mode'] = 'gather'
+        rows, summary = analyze(data, settings, FakeMarket())
+        self.assertEqual(calls[-1], set())
+        self.assertFalse(rows)
+        self.assertEqual(summary['eligible'], 0)
 
     def test_expensive_without_buyers_is_hidden_by_default(self):
         data, settings, _, sale, buying = fixture()

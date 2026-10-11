@@ -224,6 +224,38 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(float(row["window_wait_minutes"]), 10)
         self.assertEqual(row["universalis"], item_url(42))
 
+    def test_selected_profession_is_saved_and_used_in_real_demo(self):
+        for profile in self.app.profiles.values():
+            profile['level'].set('50')
+        self.app.filters['mode'].set('Крафт')
+        self.app.filters['job'].set('Carpenter')
+        self.app.filters['min_profit'].set('')
+        self.app.analyze()
+        deadline = time.monotonic() + 20
+        while self.app.busy and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(0.01)
+        self.assertFalse(self.app.busy)
+        self.assertTrue(self.app.rows, self.app.status.get())
+        self.assertEqual({r['job'] for r in self.app.rows}, {'Carpenter'})
+        self.assertEqual({r['mode'] for r in self.app.rows}, {'craft'})
+        saved, _ = load_settings(self.path)
+        self.assertEqual(saved['analysis_job'], 'Carpenter')
+        self.assertEqual(saved['analysis_mode'], 'craft')
+
+    def test_empty_result_explains_old_scope_and_reset_restores_rows(self):
+        self.app.rows = [sample_row()]
+        self.app.analyzed_scope = ('all', 'all')
+        self.app.filters['mode'].set('Крафт')
+        self.app.filters['job'].set('Carpenter')
+        self.app.redraw()
+        self.assertFalse(self.app.table.get_children())
+        self.assertIn('Показано 0 из 1', self.app.result_note.get())
+        self.assertIn('Анализировать рынок', self.app.detail.get('1.0', 'end'))
+        self.app.reset_filters()
+        self.assertEqual(self.app.table.get_children(), ('0',))
+        self.assertEqual(self.app.current_scope(), ('all', 'all'))
+
     def test_explicit_consumable_save_and_remove(self):
         self.app.consumable_vars["item"].set("7")
         self.app.consumable_vars["quantity"].set("2")
