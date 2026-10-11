@@ -28,6 +28,8 @@ def main():
     parser.add_argument('--scan-limit', type=int)
     parser.add_argument('--detail-limit', type=int)
     parser.add_argument('--catalog-search')
+    parser.add_argument('--source', choices=('all', 'craft', 'gather'))
+    parser.add_argument('--job', choices=('all', *catalog.JOBS))
     parser.add_argument('--profession', action='append', default=[], metavar='JOB:LEVEL')
     parser.add_argument('--craft-hq', action='store_true')
     args = parser.parse_args()
@@ -61,6 +63,13 @@ def main():
     elif args.craft_hq:
         for p in settings['professions'].values():
             p['hq'] = True
+    if args.profession:
+        settings['analysis_mode'] = 'all'
+        settings['analysis_job'] = 'all'
+    if args.source is not None:
+        settings['analysis_mode'] = args.source
+    if args.job is not None:
+        settings['analysis_job'] = args.job
     settings = normalize_settings(settings)
     data = catalog.load(data_path)
     rows, summary = analyze(data, settings, Market(JsonCache(config_path.parent / 'cache')), demo=args.demo,
